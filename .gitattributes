@@ -1,0 +1,4 @@
+# the tools are built and run on Linux; keep LF in the repo and on checkout so
+# tests/test_preflight.sh stays runnable no matter which platform cloned it
+* text=auto eol=lf
+*.png binary

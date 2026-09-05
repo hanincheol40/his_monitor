@@ -1,0 +1,37 @@
+  Nektar1D live field   sim   5.128 / 6.500 s  [########################......]  wall   29s  eta   83s
+  CONVERGING  cycle 7, cycle-to-cycle SBP change +0.86 mmHg             
+  cycle 7    aortic root 100.6 / 75.3  mmHg   PP 25.4   dSBP  +0.86   cf-PWV  7.54 m/s
+  116 domains  8 reader threads  116.4 MB read  peak |U| 1.04 m/s  tick now/mean/max 0.5/1.6/121.6 ms  jitter 9.7 ms  0/116 late
+  65                                    131 mmHg     cell = id  name  P[mmHg]  > wave front  arrival[ms]
+
+  AORTA / VISCERAL
+001 Asc.Aorta       101    0   002 Aortic Arch I   101    2   014 Aortic Arch II  101    8   018 Desc.Thor Aorta 102   16   026 Intercostal etc  96   17   027 Desc.Thor Aorta 102   29   
+028 Abd.Aorta I     104   36   029 Celiac          104   32   030 Celiac II       104   35   031 Hepatic         104   38   032 Splenic         105   40   033 Gastric         104   38   
+034 Sup.Mesent      106   42   035 Abd.Aorta II    103   40   036 L.Renal         105   40   037 Abd.Aorta III   105   42   038 R.Renal         105   43   039 Abd.Aorta IV    107   55   
+040 Inf.Mesent      107   57   041 Abd.Aorta V     107   59   
+
+  HEAD / NECK
+003 Brachioceph     102    3   005 R.Com.Car       101   13   006 R.Vert          104   17   012 R.Int.Car       104   28   013 R.Ext.Car I     101   17   015 L.Com.Car       100   16   
+016 L.Int.Car       101   30   017 L.Ext.Car I     102   20   020 L.Vert          102   18   056 Basil II        101   20   057 Basil I         102   26   058 R.Post.Cereb I  106   28   
+059 L.Post.Cereb I  107   28   060 R.Post.Comm     104   32   061 L.Post.Comm     103   32   062 R.Post.Cereb II 102   26   063 L.Post.Cereb II 102   26   064 R.Distal Int.Ca 105   32   
+065 L.Distal Int.Ca 106   33   066 R.Ant.Cereb I   103   30   067 L.Ant.Cereb I   104   30   068 R.Middle Cereb  104   34   069 R.Sup.Middle Ce 102   34   070 R.Inf.Middle Ce 103   34   
+071 L.Middle Cereb  105   35   072 L.Sup.Middle Ce 103   35   073 L.Inf.Middle Ce 103   35   074 R.Ant.Cereb II  101   32   075 Ant.Comm        105   35   076 L.Ant.Cereb II  101   32   
+077 R.Int.Car Sinus 105   32   078 R.Ophth          89   33   079 L.Int.Car Sinus 106   33   080 L.Ophth          89   34   081 R.Ext.Car II    104   22   082 R.Sup.Thyroid / 104   24   
+083 L.Ext.Car II    102   25   084 L.Sup.Thyroid / 101   22   085 R.Sup.Temp      102   28   086 R.Maxill         99   22   087 L.Sup.Temp      106   32   088 L.Maxill         99   25   
+089 R.Sup.Temp Fron 102   29   090 R.Sup.Temp Pari 101   30   091 L.Sup.Temp Fron 105   33   092 L.Sup.Temp Pari 105   33   093 R.Ant.Choroid   102   29   094 R.Distal Int.Ca 106   33   
+095 L.Ant.Choroid   101   30   096 L.Distal Int.Ca 106   34   
+
+  ARM / HAND
+004 R.Subclav I     103    8   007 R.Brachial      121   54   008 R.Radial        128   71   009 R.Ulnar I       124   62   010 R.Inteross      119   65   011 R.Ulnar II      125 > 78   
+019 L.Subclav I     102   11   021 L.Brachial      118   57   022 L.Radial        123   73   023 L.Ulnar I       120   65   024 L.Inteross      114   68   025 L.Ulnar II      121   81   
+097 R.Deep Palm Arc 127   74   098 R.Superf.Palm A 124 > 80   099 R.Deep Palm Arc 121 > 79   100 R.Superf.Palm A 123 > 82   101 R.Superf.Palm A 128   82   102 R.Dig III       121 > 76   
+103 R.Dig II        126   80   104 R.Dig IV        120 > 75   105 R.Dig I         126   81   106 R.Deep Palm Arc 129   78   107 L.Deep Palm Arc 121   77   108 L.Superf.Palm A 122   82   
+109 L.Deep Palm Arc 116 > 82   110 L.Superf.Palm A 119 > 85   111 L.Superf.Palm A 122   85   112 L.Dig III       116 > 78   113 L.Dig II        121   83   114 L.Dig IV        115 > 78   
+115 L.Dig I         121   83   116 L.Deep Palm Arc 123   80   
+
+  PELVIS / LEG
+042 L.Com.Iliac     109   65   043 R.Com.Iliac     107   65   044 L.Ext.Iliac     104 > 83   045 L.Int.Iliac     110   69   046 L.Fem            85 >134   047 L.Deep Fem      103 > 90   
+048 L.Post.Tibial    68  166   049 L.Ant.Tibial     68  163   050 R.Ext.Iliac     100 > 83   051 R.Int.Iliac     110   70   052 R.Fem            79 >134   053 R.Deep Fem      103 > 91   
+054 R.Post.Tibial    68  168   055 R.Ant.Tibial     67  165   
+
+  Ctrl-C to quit

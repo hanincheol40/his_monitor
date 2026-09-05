@@ -1,0 +1,15 @@
+# build output
+his_monitor
+preflight
+tests/test_hisfile
+*.o
+
+# never commit anything produced by, or belonging to, the third-party solver
+*.in
+*.bcs
+*.his
+*.out
+*.lum
+*.avg
+*.prp
+116_artery_model.txt
