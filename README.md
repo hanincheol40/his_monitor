@@ -76,6 +76,22 @@ Two terminals, same directory:
 ./his_monitor sim_1 --names 116_artery_model.txt
 ```
 
+### Try it without the solver
+
+The solver is not in this repository, so there is a generator for synthetic
+history files. It writes a 116-file tree with a plausible pressure waveform and
+two history points per file — enough to exercise both binaries, and what the
+sanitizer jobs in CI run against.
+
+```sh
+sh tests/make_his.sh /tmp/demo synth 116 3000
+./his_monitor /tmp/demo/synth --from-start
+```
+
+Three seconds of simulated time, about four heartbeats: the field fills, the
+verdict goes `FILLING` → `CONVERGING` → `CONVERGED`, and the status line shows
+the reader pool and the tick timing doing real work. Ctrl-C to quit.
+
 > [!IMPORTANT]
 > `-D_POSIX_C_SOURCE=200809L` is required, and every source file defines it for itself
 > before its first include — the `CFLAGS` entry is there so a newly added file inherits it

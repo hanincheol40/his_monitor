@@ -75,6 +75,21 @@ make test       # -> 79건 검사
 ./his_monitor sim_1 --names 116_artery_model.txt
 ```
 
+### 솔버 없이 바로 돌려보기
+
+솔버는 이 저장소에 없으므로, 합성 이력 파일 생성기를 같이 두었습니다. 그럴듯한
+압력 파형과 파일당 관측점 2개를 가진 116개 파일 트리를 만듭니다 — 두 프로그램을
+모두 돌리기에 충분하고, CI의 새니타이저 작업도 이걸 대상으로 실행합니다.
+
+```sh
+sh tests/make_his.sh /tmp/demo synth 116 3000
+./his_monitor /tmp/demo/synth --from-start
+```
+
+시뮬레이션 시간 3초, 심박 약 4회 분량입니다. 압력장이 채워지면서 판정이
+`FILLING` → `CONVERGING` → `CONVERGED` 로 바뀌고, 상태 줄에서 리더 스레드 풀과
+틱 타이밍이 실제로 일하는 것이 보입니다. Ctrl-C 로 종료합니다.
+
 > [!IMPORTANT]
 > `-D_POSIX_C_SOURCE=200809L`은 반드시 필요하고, 모든 소스 파일이 첫 `#include` 앞에서
 > 스스로 이 매크로를 정의합니다. `CFLAGS`에 있는 것은 새로 추가되는 파일도 같은 선언을
