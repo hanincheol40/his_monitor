@@ -193,7 +193,7 @@ void wave_verdict(Ctx *c, double target_pwv, double tol_pct, double stall_s,
     double dsbp = (root->psbp > 0) ? root->sbp - root->psbp : 0.0;
     double pwv  = wave_cf_pwv(c->dom, c->ndom);
     double newest = 0;
-    int i, nf = 0, alive = 0;
+    int i, nf = 0, alive = 0, never = 0;
 
     /* Hold the last good value rather than showing 0 whenever the two feet
      * momentarily belong to different beats. cf-PWV is a property of the
@@ -250,8 +250,10 @@ void wave_verdict(Ctx *c, double target_pwv, double tol_pct, double stall_s,
          *                                                  jitter */
         if (d->nsamp > 0 && now - d->last_rx <= stall_s) alive++;
         else if (c->wall > stall_s &&
-                 (d->nsamp == 0 || now - d->last_rx > 3.0 * stall_s))
+                 (d->nsamp == 0 || now - d->last_rx > 3.0 * stall_s)) {
             c->silent++;
+            if (d->nsamp == 0) never++;      /* which of the two tests it was */
+        }
     }
 
     if (newest == 0) {
@@ -296,11 +298,28 @@ void wave_verdict(Ctx *c, double target_pwv, double tol_pct, double stall_s,
      * convergence -- is skipped by the return under it. One missing file used
      * to blind the entire tool. */
     if (alive > 0 && c->silent > 0) {
+        /* Name the threshold that actually applied. The two tests above use
+         * different bars -- a domain that never wrote is judged at --stall,
+         * one that was streaming and stopped at three times that -- and a
+         * message quoting --stall for both sends the reader looking at the
+         * wrong number when the run is diagnosed later from a log. */
+        const char *root_note =
+            c->dom[0].nsamp == 0 ? " (including the aortic root)" : "";
         c->verdict = VERDICT_STALLED;
-        snprintf(c->note, sizeof c->note,
-                 "%d of %d domains silent for over %.0f s%s",
-                 c->silent, c->ndom, stall_s,
-                 c->dom[0].nsamp == 0 ? " (including the aortic root)" : "");
+        if (never == c->silent)
+            snprintf(c->note, sizeof c->note,
+                     "%d of %d domains have written nothing in %.0f s%s",
+                     c->silent, c->ndom, stall_s, root_note);
+        else if (never == 0)
+            snprintf(c->note, sizeof c->note,
+                     "%d of %d domains stopped writing over %.0f s ago%s",
+                     c->silent, c->ndom, 3.0 * stall_s, root_note);
+        else
+            snprintf(c->note, sizeof c->note,
+                     "%d of %d domains silent - %d never wrote, %d stopped "
+                     "over %.0f s ago%s",
+                     c->silent, c->ndom, never, c->silent - never,
+                     3.0 * stall_s, root_note);
         return;
     }
 

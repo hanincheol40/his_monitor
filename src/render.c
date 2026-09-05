@@ -94,7 +94,11 @@ static void put_cell(const Dom *d, const Dom *root, double lo, double hi,
     double u = (hi > lo) ? (d->P - lo) / (hi - lo) : 0.5;
     int r, g, b, dark, k;
     int ms = (int)wave_arrival_ms(d, root);
-    int front = (dpmax > 1 && d->dPdt > 0.45 * dpmax);   /* on its own upstroke */
+    /* Rising at 45% or more of the fastest-rising vessel anywhere in the tree
+     * in this frame -- not relative to this vessel's own peak dP/dt, which
+     * would need a per-domain history the renderer does not keep. It marks
+     * where the wave front is right now, which is what it is read as. */
+    int front = (dpmax > 1 && d->dPdt > 0.45 * dpmax);
 
     jet(u, &r, &g, &b);
     dark = (0.299*r + 0.587*g + 0.114*b) > 150;

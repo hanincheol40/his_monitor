@@ -1,0 +1,9 @@
+~/cohort$ ./preflight radius_*.in --ref subject_healthy.in -v
+radius_x070.in                RISK   116/116 domains off reference; worst is 21 at 70% radius (49% area, ~2.0x velocity for the same outlet R)
+radius_x074.in                RISK   116/116 domains off reference; worst is 8 at 74% radius (55% area, ~1.8x velocity for the same outlet R)
+radius_x075.in                RISK   116/116 domains off reference; worst is 8 at 75% radius (56% area, ~1.8x velocity for the same outlet R)
+radius_x076.in                RISK   116/116 domains off reference; worst is 8 at 76% radius (58% area, ~1.7x velocity for the same outlet R)
+radius_x080.in                RISK   116/116 domains off reference; worst is 1 at 80% radius (64% area, ~1.6x velocity for the same outlet R)
+radius_x090.in                OK     116 domains, worst CFL 0.103, worst R/Z0 20
+~/cohort$ echo $?
+1

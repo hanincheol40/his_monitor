@@ -1,0 +1,75 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      # strtok_r is the one that bites: -std=c11 hides it, the compiler falls
+      # back to an implicit int-returning declaration, and the returned pointer
+      # is truncated to 32 bits. Every source file also defines the macro for
+      # itself, so this is belt and braces rather than the only thing holding
+      # it up.
+      BASE: -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -pedantic -Isrc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: build, with warnings as errors
+        run: make CFLAGS="-O2 $BASE -Werror"
+
+      - name: test
+        run: make test
+
+      # The concurrency this project is about -- the reader pool, the work
+      # queue, the tick barrier -- lives in main.c, which is linked only into
+      # his_monitor. Running the unit tests under a sanitizer therefore says
+      # nothing about any of it: that process never creates a thread. These
+      # files let the real binary run, with no solver present.
+      - name: synthetic history files for the sanitizer runs
+        run: sh tests/make_his.sh "$RUNNER_TEMP/synth" synth 116 2600
+
+      - name: AddressSanitizer + UndefinedBehaviorSanitizer
+        run: |
+          make clean
+          make CFLAGS="-O1 -g $BASE -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all" all test
+          ./his_monitor "$RUNNER_TEMP/synth/synth" --bench --threads 8
+          # The monitor has no reason to stop on its own here, so timeout ends
+          # it: 124 is the pass. A sanitizer abort gives 1 or 134 instead, and
+          # `|| rc=$?` is what keeps `bash -e` from swallowing the 124 first.
+          rc=0
+          COLUMNS=200 LINES=60 timeout 25 \
+            ./his_monitor "$RUNNER_TEMP/synth/synth" --from-start --period 100 >/dev/null || rc=$?
+          [ "$rc" = 124 ] || { echo "monitor exited $rc, expected 124 (timeout)"; exit 1; }
+
+      - name: ThreadSanitizer
+        # TSan maps its shadow memory over a fixed range that collides with the
+        # address space modern kernels hand out, and aborts with "unexpected
+        # memory mapping" before main() runs. setarch -R turns randomisation
+        # off, and every TSan-built binary has to be started through it -- which
+        # is why the binaries are built here and run by hand rather than through
+        # `make test`.
+        run: |
+          make clean
+          make CFLAGS="-O1 -g $BASE -fsanitize=thread" all tests/test_hisfile
+          R="setarch $(uname -m) -R"
+          $R ./tests/test_hisfile
+          $R bash tests/test_preflight.sh ./preflight
+          $R ./his_monitor "$RUNNER_TEMP/synth/synth" --bench --threads 8
+          rc=0
+          COLUMNS=200 LINES=60 timeout 25 \
+            $R ./his_monitor "$RUNNER_TEMP/synth/synth" --from-start --period 100 >/dev/null || rc=$?
+          [ "$rc" = 124 ] || { echo "monitor exited $rc, expected 124 (timeout)"; exit 1; }
+
+      - name: cppcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cppcheck
+          cppcheck --enable=warning,performance,portability --error-exitcode=1 \
+                   --inline-suppr --std=c11 --quiet -I src src tests

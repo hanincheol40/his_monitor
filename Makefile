@@ -1,9 +1,14 @@
 CC      ?= gcc
 # -std=c11 hides everything POSIX from the standard headers, so strtok_r,
-# clock_nanosleep and TIOCGWINSZ need the feature test macro. Setting it here
-# rather than per-file keeps every translation unit on the same declarations:
-# a missing one becomes an implicit int-returning declaration, which for
-# strtok_r means a truncated pointer and a crash.
+# clock_nanosleep and TIOCGWINSZ need the feature test macro. Two of those
+# three fail loudly without it -- clock_nanosleep returns int, so an implicit
+# declaration only warns, and TIOCGWINSZ is a macro, so it is a hard "not
+# declared" error. strtok_r is the dangerous one: implicit int truncates the
+# returned char * to 32 bits and the program crashes at run time.
+#
+# Every source file also defines the macro for itself, before its first
+# include, so dropping this flag alone changes nothing. It is here so that a
+# new file added to the project inherits the right declarations by default.
 CFLAGS  ?= -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -pedantic -Isrc
 LDLIBS   = -lm -lpthread
 

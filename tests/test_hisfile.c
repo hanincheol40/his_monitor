@@ -54,7 +54,7 @@ static FILE *open_tmp(const char *name, const char *mode)
 
 /* The header names carry argument lists -- "P(x,t)" -- and the fields are
  * comma separated. Splitting on commas without removing the parenthesised
- * parts turns 6 columns into 12 and puts every index off by the number of
+ * parts turns 7 columns into 12 and puts every index off by the number of
  * parentheses seen so far. On screen that shows up as every value being 0. */
 static void test_header_with_parens(void)
 {
