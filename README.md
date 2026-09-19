@@ -542,8 +542,9 @@ Stated here rather than left for someone to find.
 - The benchmark, the radius sweep and the frame counts above were measured against real
   solver runs on the machine where this was developed. They are not reproducible from this
   repository alone, which carries no solver and no solver data.
-- The tool was built from a real problem, but after the fact. It has never been used to
-  shorten a real study.
+- The tool was written during the study in 2025 and run on the lab's machines alongside
+  real solver runs; it was collected and published here after graduation. How much time it
+  saved was never measured.
 
 ---
 
