@@ -1,5 +1,5 @@
 /*
- * preflight.c — screen Nektar1D inputs before spending machine time on them.
+ * preflight.c -- screen Nektar1D inputs before spending machine time on them.
  *
  * Why
  * ---

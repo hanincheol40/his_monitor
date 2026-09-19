@@ -1,5 +1,5 @@
 /*
- * wave.c — what the numbers mean.
+ * wave.c -- what the numbers mean.
  *
  * Three questions, answered from the .his stream alone:
  *   where is the foot of each cardiac cycle,
@@ -65,6 +65,8 @@ void wave_sample(Dom *d)
     }
     if (d->P < d->curmin) { d->curmin = d->P; d->curmint = d->t; }
     if (d->P > d->curmin + thr) {
+        /* A new foot closes the previous beat, so its systolic is final. */
+        if (d->cycle >= 1 && d->nsbp < SBP_LOG) d->sbp_log[d->nsbp++] = d->sbp;
         d->prevfoot = d->foot; d->foot = d->curmint;
         d->psbp = d->sbp;
         d->sbp  = d->P;        d->dbp  = d->curmin;
@@ -125,7 +127,7 @@ static double path_len(const Dom *dom, int ndom, const int *path, int n)
 
 /*
  * The extra distance down to the femoral divided by the extra time the foot
- * takes to get there — the model's own definition of cf-PWV.
+ * takes to get there -- the model's own definition of cf-PWV.
  *
  * The two feet have to come from the same heartbeat. The wave reaches the
  * carotid about 17 ms after the root and the femoral about 134 ms after, so
@@ -190,10 +192,13 @@ void wave_verdict(Ctx *c, double target_pwv, double tol_pct, double stall_s,
                   double umax_lim, double now)
 {
     const Dom *root = &c->dom[0];
-    double dsbp = (root->psbp > 0) ? root->sbp - root->psbp : 0.0;
+    double dsbp = wave_dsbp(root);
     double pwv  = wave_cf_pwv(c->dom, c->ndom);
     double newest = 0;
-    int i, nf = 0, alive = 0, never = 0;
+    int i, nf = 0, alive = 0, never = 0, ended = 0;
+    /* Within one history step of the final time counts as there: the last
+     * row lands on the last multiple of HISSTEP, not necessarily on tfinal. */
+    const double tend = c->tfinal - 1.5 * c->dt_step * c->hisstep;
 
     /* Hold the last good value rather than showing 0 whenever the two feet
      * momentarily belong to different beats. cf-PWV is a property of the
@@ -248,13 +253,21 @@ void wave_verdict(Ctx *c, double target_pwv, double tol_pct, double stall_s,
          *   was streaming and stopped for 3x --stall    -> generous enough to
          *                                                  clear any flush
          *                                                  jitter */
+        /* A domain that has reached the final time is quiet because it is
+         * finished. Only that domain is excused: one that stopped at t = 3 s
+         * is still a fault even after every other domain has finished. */
+        const int fin = c->tfinal > 0 && d->nsamp > 0 && d->t >= tend;
+        if (fin) ended++;
         if (d->nsamp > 0 && now - d->last_rx <= stall_s) alive++;
         else if (c->wall > stall_s &&
-                 (d->nsamp == 0 || now - d->last_rx > 3.0 * stall_s)) {
+                 (d->nsamp == 0 || (!fin && now - d->last_rx > 3.0 * stall_s))) {
             c->silent++;
             if (d->nsamp == 0) never++;      /* which of the two tests it was */
         }
     }
+    /* Finished means every domain, not the fastest one: the files flush at
+     * different rates, and a domain that died early never gets there. */
+    c->done = c->ndom > 0 && ended == c->ndom;
 
     if (newest == 0) {
         /* Nothing has arrived at all. Without this the verdict sits on
@@ -267,7 +280,11 @@ void wave_verdict(Ctx *c, double target_pwv, double tol_pct, double stall_s,
                      "never started (try --from-start)", c->wall);
             return;
         }
-    } else if (now - newest > stall_s) {
+    } else if (!c->done && now - newest > stall_s) {
+        /* A run that has reached its final time is silent because it is
+         * finished. Before this test, every successful run turned STALLED
+         * twenty seconds after its last step -- and under --abort-on-fail
+         * exited 2, reporting a finished run as a failed one. */
         c->verdict = VERDICT_STALLED;
         snprintf(c->note, sizeof c->note,
                  "no new samples for %.0f s - solver stopped or wedged",
@@ -370,12 +387,99 @@ void wave_verdict(Ctx *c, double target_pwv, double tol_pct, double stall_s,
     if (fabs(dsbp) < 0.5) {
         c->verdict = VERDICT_CONVERGED;
         snprintf(c->note, sizeof c->note,
-                 "cycle-to-cycle SBP change %.2f mmHg - periodic%s", dsbp,
-                 (target_pwv > 0 && pwv > 0) ? ", cf-PWV within tolerance" : "");
+                 "cycle-to-cycle SBP change %.2f mmHg - periodic%s%s", dsbp,
+                 (target_pwv > 0 && pwv > 0) ? ", cf-PWV within tolerance" : "",
+                 c->done ? "; run complete" : "");
     } else {
         c->verdict = VERDICT_CONVERGING;
-        snprintf(c->note, sizeof c->note,
-                 "cycle %d, cycle-to-cycle SBP change %+.2f mmHg",
-                 root->cycle, dsbp);
+        if (isfinite(dsbp))
+            snprintf(c->note, sizeof c->note,
+                     "cycle %d, cycle-to-cycle SBP change %+.2f mmHg%s",
+                     root->cycle, dsbp,
+                     c->done ? "; run ended before it settled" : "");
+        else                              /* only one beat has settled yet */
+            snprintf(c->note, sizeof c->note,
+                     "cycle %d, waiting for a second settled beat", root->cycle);
     }
+}
+
+/* ------------------------------------------------------ shared by displays
+ *
+ * The terminal and --stream both show these, so they are defined once, here.
+ * A GUI fed by --stream must not be able to disagree with the terminal about
+ * what "the wave front" or "time left" means -- two definitions of the same
+ * rule drift, and then the two displays of one run tell different stories.
+ */
+
+const char *wave_verdict_name(int v)
+{
+    static const char *T[] = { "WAITING", "FILLING", "CONVERGING",
+                               "CONVERGED", "OFF TARGET", "STALLED" };
+    return (v >= 0 && v < (int)(sizeof T / sizeof T[0])) ? T[v] : "UNKNOWN";
+}
+
+/* Latest simulated time seen anywhere in the tree. */
+double wave_tnow(const Dom *dom, int ndom)
+{
+    double t = 0;
+    int i;
+    for (i = 0; i < ndom; i++)
+        if (dom[i].nsamp && isfinite(dom[i].t) && dom[i].t > t) t = dom[i].t;
+    return t;
+}
+
+/* The fastest pressure rise anywhere in the tree in this frame. A domain with
+ * no samples yet has a dPdt of zero and is skipped rather than trusted. */
+double wave_dpmax(const Dom *dom, int ndom)
+{
+    double m = 0;
+    int i;
+    for (i = 0; i < ndom; i++)
+        if (dom[i].nsamp && isfinite(dom[i].dPdt) && dom[i].dPdt > m)
+            m = dom[i].dPdt;
+    return m;
+}
+
+/* On the wave front: rising at 45% or more of the fastest-rising vessel in
+ * the tree this frame. Relative to the tree, not to this vessel's own peak
+ * dP/dt, which would need a per-domain history nothing here keeps. It marks
+ * where the wave is right now, which is how it is read. */
+int wave_front(const Dom *d, double dpmax)
+{
+    return d->nsamp && dpmax > 1 && d->dPdt > 0.45 * dpmax;
+}
+
+/* Seconds of wall clock left, from how fast simulated time has advanced while
+ * this monitor has been watching -- not tnow/wall.
+ *
+ * tnow/wall silently assumes the monitor and the solver started together.
+ * Attach to a run that is already at t = 4.6 s and, one second later, that
+ * formula reports 4.6 s of simulation per second of wall clock and an eta of
+ * almost nothing. The first screenshot in the README was captured exactly
+ * that way and showed "eta 8s" for a run with 80 s left in it.
+ * 0 while there is no rate yet. */
+double wave_eta(const Ctx *c, double tnow)
+{
+    double rate = (c->prog_dwall > 0.5) ? c->prog_dsim / c->prog_dwall : 0;
+    return (rate > 1e-6 && c->tfinal > tnow) ? (c->tfinal - tnow) / rate : 0;
+}
+
+/* Cycle-to-cycle change in this domain's systolic pressure, between the last
+ * two beats whose peaks are known.
+ *
+ * A new foot resets the running systolic to the pressure at the foot, which is
+ * near diastolic, and it only climbs back to the real peak a tenth of a second
+ * later. Read during that upstroke, sbp - psbp is meaningless: on the
+ * 25-year-old reference run it swung to -18.4 mmHg for 14% of the final beat,
+ * a beat whose settled change is 0.49, and the verdict flickered back to
+ * CONVERGING on every heartbeat of a run that had long converged.
+ *
+ * So while a beat is still inside its lockout, its peak is not final and the
+ * previous beat's settled change is reported instead -- the latest thing that
+ * is actually known. NAN until two beats have settled. */
+double wave_dsbp(const Dom *d)
+{
+    if (d->st == 0 && d->psbp > 0) return d->sbp - d->psbp;   /* peak is final */
+    if (d->nsbp >= 2) return d->sbp_log[d->nsbp - 1] - d->sbp_log[d->nsbp - 2];
+    return NAN;
 }

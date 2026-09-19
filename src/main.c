@@ -1,5 +1,5 @@
 /*
- * main.c — threading, periodic scheduling, watchdog.
+ * main.c -- threading, periodic scheduling, watchdog.
  *
  * The tool has to do two jobs at once and they have different natures.
  *
@@ -24,6 +24,7 @@
 #include "hisfile.h"
 #include "wave.h"
 #include "render.h"
+#include "stream.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -59,7 +60,16 @@ static pthread_cond_t  q_done = PTHREAD_COND_INITIALIZER;
 static int   q_next, q_active, q_nthreads, q_quit;
 static long  q_gen;                        /* tick generation, avoids lost wakeups */
 
-static void on_sample(Dom *d) { wave_sample(d); }
+/* Set once, before any reader thread exists, and never written again -- so the
+ * readers can test it without a lock: pthread_create orders the write before
+ * everything the new thread does. */
+static int g_stream;
+
+static void on_sample(Dom *d)
+{
+    wave_sample(d);
+    if (g_stream) stream_sample(d);
+}
 
 /* Open lazily: the solver may not have created every .his yet when we start. */
 static void ensure_open(Dom *d, int from_start)
@@ -121,6 +131,31 @@ static void tick_read(void)
     pthread_mutex_unlock(&q_mtx);
 }
 
+/* 2 for a run that is failing -- off target or stalled -- 0 otherwise. */
+static int exit_code(const Ctx *c)
+{
+    return (c->verdict == VERDICT_OFFTARGET || c->verdict == VERDICT_STALLED)
+           ? 2 : 0;
+}
+
+/* The one way out once the readers are running: close the output properly
+ * (the exit record in --stream, the cursor otherwise), stop and join the pool,
+ * close the files. Three exits used to spell this out separately, and one of
+ * them had quietly stopped closing the files. */
+static int finish(pthread_t *th, int nth, int code, const char *why)
+{
+    int i;
+    if (g_stream) stream_exit(&g_ctx, code);
+    else          printf("\x1b[?25h\n");
+    if (why) fprintf(stderr, "his_monitor: %s\n", why);
+    pthread_mutex_lock(&q_mtx); q_quit = 1; q_gen++;
+    pthread_cond_broadcast(&q_go); pthread_mutex_unlock(&q_mtx);
+    for (i = 0; i < nth; i++) pthread_join(th[i], NULL);
+    for (i = 0; i < g_ctx.ndom; i++)
+        if (g_dom[i].fp) { fclose(g_dom[i].fp); g_dom[i].fp = NULL; }
+    return code;
+}
+
 /* --------------------------------------------------------------------- main */
 
 static void usage(const char *p)
@@ -147,10 +182,16 @@ static void usage(const char *p)
 "                       for three display periods in a row, so a launch script\n"
 "                       can kill the run and move on. Only ever aborts a run\n"
 "                       that has been seen to advance: a solver still doing\n"
-"                       mesh setup is STALLED on screen but is not killed\n"
+"                       mesh setup is STALLED on screen but is not killed.\n"
+"                       Also exits by itself once every domain has reached\n"
+"                       the final time: 0 if the run settled, 2 if it\n"
+"                       finished off target\n"
 "  --bench              time a full from-start read: one warm-up pass, then\n"
 "                       1 thread, N threads, and 1 thread again to show drift.\n"
-"                       Prints the four times and exits\n", p);
+"                       Prints the four times and exits\n"
+"  --stream             instead of drawing, write one JSON object per display\n"
+"                       period to stdout, for the Qt GUI in gui/. Works through\n"
+"                       ssh as it stands: ssh host his_monitor ... --stream\n", p);
 }
 
 /* Read every domain once, serially or with the pool, and time it. */
@@ -217,6 +258,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--stall")       && i+1 < argc) stall     = atof(argv[++i]);
         else if (!strcmp(argv[i], "--abort-on-fail"))             abort_on_fail = 1;
         else if (!strcmp(argv[i], "--bench"))                     bench     = 1;
+        else if (!strcmp(argv[i], "--stream"))                    g_stream  = 1;
         else { usage(argv[0]); return 1; }
     }
     if (nth < 1)  nth = 1;
@@ -299,12 +341,22 @@ int main(int argc, char **argv)
 
     signal(SIGINT, on_sig);
     signal(SIGTERM, on_sig);
-    /* Every normal exit shows the cursor again, but a path that does not --
-     * an assertion, a fatal signal we do not handle -- would leave the user's
-     * shell with no cursor until they ran `reset`. One line to make that
-     * impossible. */
-    atexit(show_cursor);
-    printf("\x1b[?25l\x1b[2J");                    /* hide cursor, clear once */
+    if (g_stream) {
+        /* Nothing but JSON may reach stdout -- one escape sequence breaks the
+         * reader's parser -- so no cursor handling at all in this mode. And a
+         * reader that goes away must end the monitor through the failed write
+         * stream_tick() reports, not through SIGPIPE, which would kill the
+         * process with the reader threads still running. */
+        signal(SIGPIPE, SIG_IGN);
+        stream_init(&g_ctx, g_base, period_ms);
+    } else {
+        /* Every normal exit shows the cursor again, but a path that does not
+         * -- an assertion, a fatal signal we do not handle -- would leave the
+         * user's shell with no cursor until they ran `reset`. One line to
+         * make that impossible. */
+        atexit(show_cursor);
+        printf("\x1b[?25l\x1b[2J");                /* hide cursor, clear once */
+    }
 
     t_start = mono();
     next = t_start;
@@ -339,7 +391,8 @@ int main(int argc, char **argv)
         }
 
         wave_verdict(&g_ctx, target, tol, stall, umax_lim, t0);
-        render(&g_ctx, target);
+        if (g_stream) { if (stream_tick(&g_ctx) < 0) g_stop = 1; }
+        else          render(&g_ctx, target);
         t1 = mono();
 
         g_ctx.tick_ms = (t1 - t0) * 1000.0;
@@ -356,15 +409,16 @@ int main(int argc, char **argv)
          * Aborting requires having seen the run work at least once. */
         if (abort_on_fail && g_ctx.prog_dsim > 0 &&
             (g_ctx.verdict == VERDICT_OFFTARGET || g_ctx.verdict == VERDICT_STALLED)) {
-            if (++bad_streak >= 3) {              /* three periods in a row */
-                printf("\x1b[?25h\n");
-                fprintf(stderr, "his_monitor: %s\n", g_ctx.note);
-                pthread_mutex_lock(&q_mtx); q_quit = 1; q_gen++;
-                pthread_cond_broadcast(&q_go); pthread_mutex_unlock(&q_mtx);
-                for (i = 0; i < nth; i++) pthread_join(th[i], NULL);
-                return 2;
-            }
+            if (++bad_streak >= 3)                /* three periods in a row */
+                return finish(th, nth, 2, g_ctx.note);
         } else bad_streak = 0;
+
+        /* A finished run ends a scripted monitor too, with the run's own
+         * verdict: 0 when it settled, 2 if it finished off target. Without
+         * this a launch script waiting on --abort-on-fail would wait forever
+         * once the solver had exited cleanly. */
+        if (abort_on_fail && g_ctx.done)
+            return finish(th, nth, exit_code(&g_ctx), g_ctx.note);
 
         /* Absolute-deadline sleep: the next period starts when it was always
          * going to start, not one period after this one happened to finish. */
@@ -396,10 +450,5 @@ int main(int argc, char **argv)
         }
     }
 
-    printf("\x1b[?25h\n");
-    pthread_mutex_lock(&q_mtx); q_quit = 1; q_gen++;
-    pthread_cond_broadcast(&q_go); pthread_mutex_unlock(&q_mtx);
-    for (i = 0; i < nth; i++) pthread_join(th[i], NULL);
-    for (i = 0; i < g_ctx.ndom; i++) if (g_dom[i].fp) fclose(g_dom[i].fp);
-    return g_ctx.verdict == VERDICT_OFFTARGET || g_ctx.verdict == VERDICT_STALLED ? 2 : 0;
+    return finish(th, nth, exit_code(&g_ctx), NULL);
 }

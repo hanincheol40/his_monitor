@@ -1,5 +1,5 @@
 /*
- * test_hisfile.c — regression tests for the file-format layer.
+ * test_hisfile.c -- regression tests for the file-format layer.
  *
  * Every case here is a bug that actually happened, not a hypothetical. The
  * parsing layer is the part with no visible symptoms when it is wrong: a
@@ -12,6 +12,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "hisfile.h"
 #include "wave.h"
+#include "stream.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -473,7 +474,7 @@ static void test_pairing_never_returns_nan(void)
 }
 
 /* ------------------------------------------------------------------------ */
-/* wave_verdict — the function that kills runs through --abort-on-fail.
+/* wave_verdict -- the function that kills runs through --abort-on-fail.
  * It is a pure function of a Ctx and a clock, so it can be driven by hand. */
 
 static Dom  vdom[116];
@@ -582,6 +583,159 @@ static void test_verdict_pwv_hold_is_counted_in_beats(void)
 
 /* ------------------------------------------------------------------------ */
 
+/* A run that has reached its final time is silent because it is finished.
+ * It used to turn STALLED twenty seconds after its last step -- and under
+ * --abort-on-fail exit 2, reporting every successful run as a failure. Found
+ * while building the GUI, which painted a finished run red. */
+static void test_verdict_finished_run_is_not_stalled(void)
+{
+    double now = 1000.0;
+    int i;
+    verdict_setup(now, 100.0);                /* nothing new for 100 s */
+    vctx.tfinal = 6.5; vctx.dt_step = 1e-5; vctx.hisstep = 100;
+    for (i = 0; i < 116; i++) vdom[i].t = 6.5;
+    wave_verdict(&vctx, 0, 10.0, 20.0, 2.0, now);
+    CHECK(vctx.done, "every domain at the final time should read as done");
+    CHECK(vctx.verdict == VERDICT_CONVERGED,
+          "a finished run is not STALLED: got '%s'", vctx.note);
+    CHECK(strstr(vctx.note, "run complete") != NULL,
+          "and it should say it is complete: '%s'", vctx.note);
+}
+
+/* Finished means every domain. One that stopped at t = 3 s is still a fault
+ * after all the others have reached the end: the excuse is per domain, not
+ * "the fastest file got there". */
+static void test_verdict_early_stop_still_caught_when_others_finish(void)
+{
+    double now = 1000.0;
+    int i;
+    verdict_setup(now, 100.0);
+    vctx.tfinal = 6.5; vctx.dt_step = 1e-5; vctx.hisstep = 100;
+    for (i = 0; i < 116; i++) vdom[i].t = 6.5;
+    vdom[60].t = 3.0;                         /* died halfway */
+    wave_verdict(&vctx, 0, 10.0, 20.0, 2.0, now);
+    CHECK(!vctx.done, "one domain short of the final time: not done");
+    CHECK(vctx.verdict == VERDICT_STALLED,
+          "a domain that stopped early must still be caught: got '%s'",
+          vctx.note);
+}
+
+/* dSBP must not dip on every upstroke. A new foot resets the running systolic
+ * to near-diastolic pressure; read naively, sbp - psbp swung to -18.4 mmHg on
+ * 14% of the last beat of the reference run -- a beat whose settled change is
+ * 0.49 -- and the verdict flickered back to CONVERGING every heartbeat. While
+ * a beat is still rising the previous settled change is reported, so dSBP
+ * never goes below the most negative change that really happened. */
+static void test_dsbp_holds_through_the_upstroke(void)
+{
+    static Dom d;
+    int i;
+    double lo_shown = 0, lo_real = 0;
+    const double period = 0.8, dt = 0.001;
+    memset(&d, 0, sizeof d);
+    d.curmin = 1e9;
+    for (i = 0; i < 6000; i++) {
+        double t = i * dt, ph = fmod(t, period) / period, ds;
+        d.t = t;
+        d.P = 75.0 + 25.0 * exp(-t / 1.5)
+            + 30.0 * exp(-3.0 * ph) * sin(3.14159 * (ph < 0.5 ? ph * 2 : 0));
+        wave_sample(&d);
+        ds = wave_dsbp(&d);
+        if (d.cycle >= 4 && isfinite(ds) && ds < lo_shown) lo_shown = ds;
+    }
+    for (i = 2; i < d.nsbp; i++)       /* the changes it may show from beat 4 */
+        if (d.sbp_log[i] - d.sbp_log[i - 1] < lo_real)
+            lo_real = d.sbp_log[i] - d.sbp_log[i - 1];
+    CHECK(lo_shown >= lo_real - 1e-9,
+          "dSBP showed %.2f mid-beat, below any real beat-to-beat change (%.2f)",
+          lo_shown, lo_real);
+}
+
+/* ------------------------------------------------------------ --stream */
+
+/* One sample per 5 ms of simulated time whatever the row rate, and the ring
+ * keeps only the newest HIST_N. A display asking for "what arrived since last
+ * time" after a from-start sweep must get the last two seconds -- not the
+ * first two, and not an overrun. */
+static void test_stream_history_decimates_and_keeps_newest(void)
+{
+    static Dom d;                    /* static: the ring is a few KB */
+    int i, bad = 0, last, first;
+    memset(&d, 0, sizeof d);
+    for (i = 0; i < 3000; i++) {     /* 3 s of rows at 1 kHz */
+        d.t = i * 0.001;
+        d.P = 80.0 + i * 0.01;
+        stream_sample(&d);
+    }
+    CHECK(d.hist_total == 600, "stored %ld samples from 3000 rows, want 600",
+          d.hist_total);
+    last  = (d.hist_head - 1 + HIST_N) % HIST_N;   /* newest */
+    first = d.hist_head;                           /* ring full: oldest here */
+    CHECK(fabs(d.hist_t[last] - 2.995) < 1e-4,
+          "newest kept t = %.4f, want 2.995", d.hist_t[last]);
+    CHECK(fabs(d.hist_t[first] - 1.000) < 1e-4,
+          "oldest kept t = %.4f, want 1.000 (the newest 2 s)", d.hist_t[first]);
+    for (i = 1; i < HIST_N; i++) {
+        int a = (first + i - 1) % HIST_N, b = (first + i) % HIST_N;
+        if (fabs((d.hist_t[b] - d.hist_t[a]) - 0.005) > 1e-4) bad++;
+    }
+    CHECK(bad == 0, "%d gaps in the kept history are not 5 ms", bad);
+}
+
+/* A rerun into the same files starts again at t = 0. That must restart the
+ * history rather than freeze it until the new run catches up with the old. */
+static void test_stream_history_restarts_when_time_goes_back(void)
+{
+    static Dom d;
+    memset(&d, 0, sizeof d);
+    d.t = 4.000; d.P = 100.0; stream_sample(&d);
+    d.t = 0.500; d.P =  80.0; stream_sample(&d);
+    CHECK(d.hist_total == 2, "time going backwards was dropped: %ld stored",
+          d.hist_total);
+}
+
+/* The terminal's '>' marker and the stream's front flag are one test, and it
+ * is relative to the whole tree this frame, not to the vessel's own upstroke.
+ * The README once described it the other way; this pins what it really is. */
+static void test_wave_front_is_relative_to_the_tree(void)
+{
+    static Dom dom[3];
+    memset(dom, 0, sizeof dom);
+    dom[0].nsamp = 1; dom[0].dPdt = 100;
+    dom[1].nsamp = 1; dom[1].dPdt = 50;
+    dom[2].nsamp = 0; dom[2].dPdt = 5000;   /* no samples: must not count */
+    CHECK(wave_dpmax(dom, 3) == 100, "dpmax %.0f, want 100: a domain with no "
+          "samples must not set it", wave_dpmax(dom, 3));
+    CHECK(wave_front(&dom[1], 100),  "rising at 50 of 100 is on the front");
+    CHECK(!wave_front(&dom[1], 1000), "rising at 50 of 1000 is not");
+    CHECK(!wave_front(&dom[2], 100),  "a domain with no samples never is");
+}
+
+/* Every completed beat's systolic is kept, in order, so a display can draw
+ * convergence -- including one that attached late or read a finished run,
+ * where the live dSBP has long since moved on. With a startup decay in the
+ * diastole, each beat's systolic is lower than the last. */
+static void test_sbp_log_records_each_completed_beat(void)
+{
+    static Dom d;
+    int i, down = 1;
+    const double period = 0.8, dt = 0.001;
+    memset(&d, 0, sizeof d);
+    d.curmin = 1e9;
+    for (i = 0; i < 6000; i++) {
+        double t = i * dt, ph = fmod(t, period) / period;
+        d.t = t;
+        d.P = 75.0 + 25.0 * exp(-t / 1.5)
+            + 30.0 * exp(-3.0 * ph) * sin(3.14159 * (ph < 0.5 ? ph * 2 : 0));
+        wave_sample(&d);
+    }
+    CHECK(d.nsbp == d.cycle - 1, "%d beats logged for %d feet, want one per "
+          "closed beat", d.nsbp, d.cycle);
+    for (i = 1; i < d.nsbp; i++)
+        if (!(d.sbp_log[i] < d.sbp_log[i - 1])) down = 0;
+    CHECK(down, "systolic should fall beat by beat with the startup decay");
+}
+
 int main(void)
 {
     if (system("mkdir -p /tmp/his_monitor_test") != 0) {
@@ -612,6 +766,13 @@ int main(void)
     test_verdict_sees_one_dead_domain();
     test_verdict_startup_is_not_a_dead_domain();
     test_verdict_pwv_hold_is_counted_in_beats();
+    test_verdict_finished_run_is_not_stalled();
+    test_verdict_early_stop_still_caught_when_others_finish();
+    test_dsbp_holds_through_the_upstroke();
+    test_stream_history_decimates_and_keeps_newest();
+    test_stream_history_restarts_when_time_goes_back();
+    test_wave_front_is_relative_to_the_tree();
+    test_sbp_log_records_each_completed_beat();
 
     printf("%d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;

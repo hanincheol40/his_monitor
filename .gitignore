@@ -13,3 +13,6 @@ tests/test_hisfile
 *.avg
 *.prp
 116_artery_model.txt
+
+# Qt GUI build tree (make gui)
+gui/build/

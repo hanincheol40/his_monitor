@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-#  test_preflight.sh — black-box tests for the pre-run input checker.
+#  test_preflight.sh -- black-box tests for the pre-run input checker.
 #
 #  Black box on purpose. preflight's dangerous failure is not a crash, it is
 #  printing "OK" for a file that is not OK, and that is a property of the whole

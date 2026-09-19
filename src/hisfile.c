@@ -1,5 +1,5 @@
 /*
- * hisfile.c — the two Nektar1D file formats.
+ * hisfile.c -- the two Nektar1D file formats.
  *
  *   sim_N.in        a sectioned text file: parameter block, mesh block (one
  *                   entry per element, geometry given as formula strings),

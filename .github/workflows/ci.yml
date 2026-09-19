@@ -54,13 +54,16 @@ jobs:
         # memory mapping" before main() runs. setarch -R turns randomisation
         # off, and every TSan-built binary has to be started through it -- which
         # is why the binaries are built here and run by hand rather than through
-        # `make test`.
+        # `make test`. The personality is inherited, so the shell tests can be
+        # wrapped whole. --stream matters here: its history ring is written by
+        # the reader threads and read by the main thread.
         run: |
           make clean
           make CFLAGS="-O1 -g $BASE -fsanitize=thread" all tests/test_hisfile
           R="setarch $(uname -m) -R"
           $R ./tests/test_hisfile
           $R bash tests/test_preflight.sh ./preflight
+          $R bash tests/test_stream.sh ./his_monitor
           $R ./his_monitor "$RUNNER_TEMP/synth/synth" --bench --threads 8
           rc=0
           COLUMNS=200 LINES=60 timeout 25 \
@@ -73,3 +76,39 @@ jobs:
           sudo apt-get install -y -qq cppcheck
           cppcheck --enable=warning,performance,portability --error-exitcode=1 \
                    --inline-suppr --std=c11 --quiet -I src src tests
+
+  gui:
+    # The Qt front end. It reimplements nothing -- it draws what the monitor's
+    # --stream says -- so the risk is the two ends of that stream drifting
+    # apart. This job makes the GUI read real monitor output with its own
+    # parser, then run headless against the monitor and draw a frame.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Qt 5 and CMake
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qtbase5-dev cmake
+
+      - name: build the monitor and the GUI, warnings as errors
+        run: |
+          make
+          cmake -S gui -B gui/build -DCMAKE_BUILD_TYPE=Release -DHIS_WERROR=ON
+          cmake --build gui/build -j
+
+      - name: the GUI's parser reads what the monitor writes
+        run: |
+          sh tests/make_his.sh "$RUNNER_TEMP/synth" synth 116 2600
+          rc=0
+          timeout 5 ./his_monitor "$RUNNER_TEMP/synth/synth" --from-start --stream \
+              --period 100 >"$RUNNER_TEMP/stream.jsonl" || rc=$?
+          [ "$rc" = 124 ] || { echo "monitor exited $rc, expected 124 (timeout)"; exit 1; }
+          ./gui/build/his_gui --check-stream "$RUNNER_TEMP/stream.jsonl"
+
+      - name: the GUI runs headless against the monitor and draws
+        run: |
+          QT_QPA_PLATFORM=offscreen ./gui/build/his_gui "$RUNNER_TEMP/synth/synth" \
+              --from-start --monitor ./his_monitor \
+              --capture "$RUNNER_TEMP/frames" --every 2 --quit-after 5
+          test -s "$RUNNER_TEMP/frames/frame_001.png"

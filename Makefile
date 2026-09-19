@@ -12,9 +12,9 @@ CC      ?= gcc
 CFLAGS  ?= -O2 -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra -pedantic -Isrc
 LDLIBS   = -lm -lpthread
 
-MON_SRC = src/main.c src/hisfile.c src/wave.c src/render.c
+MON_SRC = src/main.c src/hisfile.c src/wave.c src/render.c src/stream.c
 MON_OBJ = $(MON_SRC:.c=.o)
-HDR     = src/monitor.h src/hisfile.h src/wave.h src/render.h
+HDR     = src/monitor.h src/hisfile.h src/wave.h src/render.h src/stream.h
 
 all: his_monitor preflight
 
@@ -27,7 +27,7 @@ preflight: src/preflight.o
 %.o: %.c $(HDR)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# Two kinds of test, because the two programs fail differently.
+# Three kinds of test, because the pieces fail differently.
 #
 # his_monitor's parsing layer is linked in directly (without main.c) and driven
 # from C: its failures are wrong values in memory, so the state has to be read
@@ -35,14 +35,25 @@ preflight: src/preflight.o
 # failure is printing "OK" for a file that is not OK, which is a property of
 # the parser, the checks and the reporting together -- and the one real bug in
 # it produced a perfectly well-formed number that only the verdict revealed.
-test: tests/test_hisfile preflight
+# --stream is exercised the same way, because its contract is the byte stream
+# on stdout and the ways that breaks -- an escape sequence in the JSON, a nan
+# no parser accepts -- belong to the whole program.
+test: tests/test_hisfile preflight his_monitor
 	./tests/test_hisfile
 	@bash tests/test_preflight.sh ./preflight
+	@bash tests/test_stream.sh ./his_monitor
 
-tests/test_hisfile: tests/test_hisfile.c src/hisfile.o src/wave.o $(HDR)
-	$(CC) $(CFLAGS) -o $@ tests/test_hisfile.c src/hisfile.o src/wave.o $(LDLIBS)
+tests/test_hisfile: tests/test_hisfile.c src/hisfile.o src/wave.o src/stream.o $(HDR)
+	$(CC) $(CFLAGS) -o $@ tests/test_hisfile.c src/hisfile.o src/wave.o src/stream.o $(LDLIBS)
+
+# The Qt GUI builds with CMake and needs Qt 5 -- nothing above does. Kept out
+# of `all` so the monitor still builds on a server with no Qt installed.
+gui: his_monitor
+	cmake -S gui -B gui/build -DCMAKE_BUILD_TYPE=Release
+	cmake --build gui/build -j
 
 clean:
 	rm -f his_monitor preflight $(MON_OBJ) src/preflight.o tests/test_hisfile
+	rm -rf gui/build
 
-.PHONY: all clean test
+.PHONY: all clean test gui

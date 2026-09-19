@@ -1,10 +1,11 @@
 /*
- * monitor.h — shared types for his_monitor.
+ * monitor.h -- shared types for his_monitor.
  *
  * Layering:
  *   hisfile.[ch]  the file formats  (.in geometry / .his time series)
  *   wave.[ch]     the signal analysis (foot detection, PWV, convergence)
  *   render.[ch]   the terminal display
+ *   stream.[ch]   the same display as JSON lines, for a GUI (--stream)
  *   main.c        threading, periodic scheduling, watchdog
  */
 #ifndef MONITOR_H
@@ -17,6 +18,8 @@
 #define MAXPTS     16
 #define MAXCOL     24
 #define PA2MMHG (1.0/133.322)     /* .his pressure is in Pa */
+#define HIST_N    400             /* --stream waveform history: 2 s at 200 Hz */
+#define SBP_LOG    64             /* systolic pressure of each completed beat  */
 
 /* One arterial segment: its geometry, its open .his file, and its state. */
 typedef struct {
@@ -54,6 +57,23 @@ typedef struct {
     double psbp;                  /* previous cycle's systolic, for dSBP      */
     double amp;
     int    cycle;
+
+    /* Systolic pressure of every completed beat, in order. dSBP on screen is
+     * only the latest difference; a display that wants to draw convergence
+     * needs the whole series, and in --from-start mode the first tick
+     * swallows every beat at once, so it cannot be rebuilt from ticks. */
+    double sbp_log[SBP_LOG];
+    int    nsbp;
+
+    /* Decimated pressure history for --stream, so another process can draw
+     * the waveform. Written only by the reader thread that holds this domain
+     * during a tick and read only by the main thread after the tick barrier;
+     * the barrier's mutex orders the two, so it needs no lock of its own. */
+    float  hist_t[HIST_N], hist_p[HIST_N];
+    int    hist_head;             /* next slot to write                       */
+    long   hist_total;            /* samples ever stored                      */
+    long   hist_sent;             /* hist_total when the last line went out   */
+    double hist_last;             /* t of the last stored sample              */
 } Dom;
 
 /* Everything the render layer needs that is not per-domain. */
@@ -85,6 +105,7 @@ typedef struct {
     int    ioerr_dom;             /* domains that hit a read error            */
     int    silent;                /* domains individually quiet: see wave.c   */
     int    pwv_cycle;             /* the beat pwv was last computed on        */
+    int    done;                  /* every domain has reached tfinal          */
     char   note[128];
 } Ctx;
 

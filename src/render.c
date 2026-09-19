@@ -1,5 +1,5 @@
 /*
- * render.c — the terminal display.
+ * render.c -- the terminal display.
  *
  * ANSI truecolour, cursor addressing, no full-screen clear between frames so
  * nothing flickers. Works over ssh with no X11, which is the only place this
@@ -22,7 +22,7 @@
 static const char *RNAME[4] = {"AORTA / VISCERAL", "HEAD / NECK",
                                "ARM / HAND", "PELVIS / LEG"};
 
-/* Classic rainbow (jet) — the map 1-D solver post-processors conventionally
+/* Classic rainbow (jet) -- the map 1-D solver post-processors conventionally
  * use, so this picture matches the figures people already know. */
 void jet(double u, int *r, int *g, int *b)
 {
@@ -94,11 +94,7 @@ static void put_cell(const Dom *d, const Dom *root, double lo, double hi,
     double u = (hi > lo) ? (d->P - lo) / (hi - lo) : 0.5;
     int r, g, b, dark, k;
     int ms = (int)wave_arrival_ms(d, root);
-    /* Rising at 45% or more of the fastest-rising vessel anywhere in the tree
-     * in this frame -- not relative to this vessel's own peak dP/dt, which
-     * would need a per-domain history the renderer does not keep. It marks
-     * where the wave front is right now, which is what it is read as. */
-    int front = (dpmax > 1 && d->dPdt > 0.45 * dpmax);
+    int front = wave_front(d, dpmax);     /* same rule as --stream: wave.c */
 
     jet(u, &r, &g, &b);
     dark = (0.299*r + 0.587*g + 0.114*b) > 150;
@@ -115,13 +111,11 @@ static void put_cell(const Dom *d, const Dom *root, double lo, double hi,
 
 void render(const Ctx *c, double target_pwv)
 {
-    static const char *VTXT[] = { "WAITING", "FILLING", "CONVERGING",
-                                  "CONVERGED", "OFF TARGET", "STALLED" };
     static const char *VCOL[] = { "\x1b[37m", "\x1b[37m", "\x1b[33m",
                                   "\x1b[1;32m", "\x1b[1;31m", "\x1b[1;31m" };
     const Dom *root = &c->dom[0];
-    double lo = 1e9, hi = -1e9, dpmax = 0, tnow = 0, pwv, rate, eta = 0;
-    double dsbp = (root->psbp > 0) ? root->sbp - root->psbp : 0.0;
+    double lo = 1e9, hi = -1e9, dpmax, tnow, pwv, eta;
+    double dsbp = wave_dsbp(root);
     int cols, rows, i, per, reg, gap = 1, used, budget, hidden = 0;
 
     term_size(&cols, &rows);
@@ -141,22 +135,13 @@ void render(const Ctx *c, double target_pwv)
                                                          every cell's u nan */
         if (d->P < lo)     lo = d->P;
         if (d->P > hi)     hi = d->P;
-        if (d->dPdt > dpmax) dpmax = d->dPdt;
-        if (d->t > tnow)   tnow = d->t;
     }
     if (hi <= lo) { lo = 60; hi = 140; }
     lo -= 2; hi += 2;
-    pwv  = c->pwv;                       /* main.c fills this via wave.c */
-    /* How fast simulated time is advancing, measured from where this monitor
-     * came in -- not tnow/wall.
-     *
-     * tnow/wall silently assumes the monitor and the solver started together.
-     * Attach to a run that is already at t = 4.6 s and, one second later, that
-     * formula reports 4.6 s of simulation per second of wall clock and an eta
-     * of almost nothing. The screenshot in the README was captured exactly
-     * that way and showed "eta 8s" for a run with 80 s left in it. */
-    rate = (c->prog_dwall > 0.5) ? c->prog_dsim / c->prog_dwall : 0;
-    if (rate > 1e-6 && c->tfinal > tnow) eta = (c->tfinal - tnow) / rate;
+    dpmax = wave_dpmax(c->dom, c->ndom);
+    tnow  = wave_tnow(c->dom, c->ndom);
+    pwv   = c->pwv;                      /* main.c fills this via wave.c */
+    eta   = wave_eta(c, tnow);           /* see wave.c for why not tnow/wall */
 
     printf("\x1b[H");
     printf("\x1b[1m  Nektar1D live field\x1b[0m   sim %7.3f / %.3f s  [",
@@ -165,11 +150,16 @@ void render(const Ctx *c, double target_pwv)
     printf("]  wall %4.0fs  eta %4.0fs\x1b[K\n", c->wall, eta);
 
     printf("  %s%-11s\x1b[0m %-58.58s\x1b[K\n",
-           VCOL[c->verdict], VTXT[c->verdict], c->note);
+           VCOL[c->verdict], wave_verdict_name(c->verdict), c->note);
 
-    printf("  cycle %-3d  aortic root \x1b[1m%5.1f / %-5.1f\x1b[0m mmHg   "
-           "PP %4.1f   dSBP %+6.2f   cf-PWV %5.2f m/s",
-           root->cycle, root->sbp, root->dbp, root->sbp - root->dbp, dsbp, pwv);
+    {
+        char ds[16];                    /* "--" until two beats have settled */
+        if (isfinite(dsbp)) snprintf(ds, sizeof ds, "%+6.2f", dsbp);
+        else                snprintf(ds, sizeof ds, "%6s", "--");
+        printf("  cycle %-3d  aortic root \x1b[1m%5.1f / %-5.1f\x1b[0m mmHg   "
+               "PP %4.1f   dSBP %s   cf-PWV %5.2f m/s",
+               root->cycle, root->sbp, root->dbp, root->sbp - root->dbp, ds, pwv);
+    }
     if (target_pwv > 0) printf("   target %.2f", target_pwv);
     printf("\x1b[K\n");
 
